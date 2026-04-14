@@ -30,7 +30,7 @@ var baseSpeed=INIT_SPEED,curSpeed=INIT_SPEED,spawnCD=0;
 var shakeAmt=0,bgScroll=0,now=0;
 
 /* ====== 玩家 ====== */
-var px=0,py=0,pSize=18,pMaxSize=18,P.vx=0;P.vy=0,pAlive=true,P.wb=0;
+var px=0,py=0,pSize=18,pMaxSize=18,pAlive=true;P.vx=0;P.vy=0;P.wb=0;
 var pColor='#00d4ff',pTrail=[];
 var skillCDs=[0,0,0,0],skillActives=[0,0,0,0];
 var magnetRange=0,invTime=0,dashTime=0,slowTime=0;
@@ -414,7 +414,7 @@ function update(dt){
   // Joystick 4-directional movement
   if(JOY.active){P.vx+=JOY.dx*0.8;P.vy+=JOY.dy*0.8;P.vx*=0.8;P.vy*=0.8;if(Math.abs(JOY.dx)>0.1||Math.abs(JOY.dy)>0.1)P.angle=Math.atan2(JOY.dy,JOY.dx)}
   else{P.vx*=0.88;P.vy*=0.88}
-  px+=P.vx;py+=P.vy;
+  px+=P.vx||0;py+=P.vy||0;
   var m=P.size+10;if(px<m){px=m;P.vx=0}if(px>W-m){px=W-m;P.vx=0}if(py<m+50){py=m+50;P.vy=0}if(py>H-m-10){py=H-m-10;P.vy=0}
   px+=pvx;var m=pSize+10;if(px<m){px=m;P.vx=0;P.vy=0}if(px>W-m){px=W-m;P.vx=0;P.vy=0}
   P.wb+=dt*10;pSize=pMaxSize*0.75+Math.sin(now*0.005)*pMaxSize*0.08;
