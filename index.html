@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,maximum-scale=1">
+<title>小鱼快跑</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#071525;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+/* ====== 画布初始化 ====== */
+var cv = document.getElementById('cv');
+var ctx = cv.getContext('2d');
+var W = 0, H = 0;
+
+function resize() {
+    W = cv.width = window.innerWidth;
+    H = cv.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ====== 常量 ====== */
+var INIT_SPEED = 2.5;
+var MAX_SPEED_MULT = 3.0;
+var COMBO_TIMEOUT = 2.0; // 秒
+var PLAYER_BASE_SIZE = 18;
+var PLAYER_GROW_FACTOR = 0.04;
+
+/* ====== 状态 ====== */
+var ST_MENU = 0, ST_PLAY = 1, ST_DEAD = 2;
+var state = ST_MENU;
+var score = 0;
+var distance = 0;
+var combo = 0;
+var maxCombo = 0;
+var comboTimer = 0;
+var baseSpeed = INIT_SPEED;
+var curSpeed = INIT_SPEED;
+var spawnCD = 0;
+var shakeAmt = 0;
+var deathTimer = 0;
+var bgScroll = 0;
+var now = 0;
+
+/* ====== 玩家 ====== */
+var px = 0, py = 0, pSize = PLAYER_BASE_SIZE, pMaxSize = PLAYER_BASE_SIZE;
+var pvx = 0, pAlive = true, pWobble = 0;
+var pColor = '#00d4ff';
+var pTrail = [];
+
+/* ====== 对象池 ====== */
+var fishes = [];
+var bubbles = [];
+var particles = [];
+
+/* ====== 输入 ====== */
+var inputActive = false;
+var inputX = 0;
+
+cv.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    inputActive = true;
+    inputX = e.touches[0].clientX;
+    if (state === ST_MENU) { startGame(); return; }
+    if (state === ST_DEAD) { goMenu(); return; }
+}, {passive: false});
+
+cv.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    if (inputActive) inputX = e.touches[0].clientX;
+}, {passive: false});
+
+cv.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    inputActive = false;
+}, {passive: false});
+
+cv.addEventListener('mousedown', function(e) {
+    inputActive = true;
+    inputX = e.clientX;
+    if (state === ST_MENU) { startGame(); return; }
+    if (state === ST_DEAD) { goMenu(); return; }
+});
+cv.addEventListener('mousemove', function(e) {
+    if (inputActive) inputX = e.clientX;
+});
+cv.addEventListener('mouseup', function() { inputActive = false; });
+
+/* ====== 游戏控制 ====== */
+function startGame() {
+    state = ST_PLAY;
+    score = 0; distance = 0; combo = 0; maxCombo = 0; comboTimer = 0;
+    baseSpeed = INIT_SPEED; curSpeed = INIT_SPEED; spawnCD = 0;
+    shakeAmt = 0; deathTimer = 0;
+    px = W / 2; py = H * 0.7;
+    pSize = PLAYER_BASE_SIZE; pMaxSize = PLAYER_BASE_SIZE;
+    pAlive = true; pvx = 0; pWobble = 0;
+    pTrail = [];
+    fishes = []; particles = [];
+}
+
+function goMenu() {
+    state = ST_MENU;
+    fishes = []; particles = []; pTrail = [];
+}
+
+function die() {
+    pAlive = false;
+    shakeAmt = 12;
+    deathTimer = 0;
+    spawnParticles(px, py, pColor, 25);
+    spawnParticles(px, py, '#ff4444', 10);
+    state = ST_DEAD;
+}
+
+/* ====== 鱼类生成 ====== */
+function spawnFish() {
+    // 决定大小：60%比玩家小，40%比玩家大
+    var r = Math.random();
+    var sz, clr, type;
+
+    if (r < 0.05) {
+        // 金色鱼群 - 小鱼，高分
+        sz = 8 + Math.random() * 10;
+        clr = '#ffd700';
+        type = 0; // golden
+    } else if (r < 0.10) {
+        // 炸弹鱼 - 碰了减速
+        sz = 10 + Math.random() * 12;
+        clr = '#ff6d00';
+        type = 1; // bomb
+    } else if (r < 0.15) {
+        // 漩涡 - 加速冲刺
+        sz = 12 + Math.random() * 8;
+        clr = '#aa00ff';
+        type = 2; // vortex
+    } else if (r < 0.65) {
+        // 普通小鱼
+        sz = 6 + Math.random() * (pMaxSize * 0.7);
+        clr = randomFishColor(0);
+        type = -1; // normal small
+    } else {
+        // 普通大鱼
+        sz = pMaxSize * 1.3 + Math.random() * 25;
+        clr = randomFishColor(1);
+        type = -2; // normal big
+    }
+
+    var dir = Math.random() < 0.5 ? 1 : -1;
+    fishes.push({
+        x: 20 + Math.random() * (W - 40),
+        y: -sz - 10,
+        size: sz,
+        vy: 0.4 + Math.random() * 1.2,
+        vx: dir * (0.3 + Math.random() * 1.5),
+        color: clr,
+        type: type,
+        wobble: Math.random() * 6.28
+    });
+}
+
+function randomFishColor(big) {
+    var colors = big
+        ? ['#e53935','#d81b60','#6a1b9a','#ad1457','#bf360c']
+        : ['#4fc3f7','#4dd0e1','#81c784','#aed581','#fff176','#ffb74d','#f48fb1'];
+    return colors[Math.floor(Math.random() * colors.length)];
+}
+
+/* ====== 粒子系统 ====== */
+function spawnParticles(x, y, color, count) {
+    for (var i = 0; i < count; i++) {
+        var angle = Math.random() * 6.28;
+        var spd = 1 + Math.random() * 4;
+        particles.push({
+            x: x, y: y,
+            vx: Math.cos(angle) * spd,
+            vy: Math.sin(angle) * spd,
+            life: 25 + Math.random() * 25,
+            maxLife: 50,
+            size: 2 + Math.random() * 5,
+            color: color
+        });
+    }
+}
+
+/* ====== 碰撞 ====== */
+function collide(ax, ay, ar, bx, by, br) {
+    var dx = ax - bx, dy = ay - by;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    return dist < (ar + br) * 0.55;
+}
+
+/* ====== 颜色工具 ====== */
+function colorShift(hex, amt) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    r = Math.max(0, Math.min(255, r + amt));
+    g = Math.max(0, Math.min(255, g + amt));
+    b = Math.max(0, Math.min(255, b + amt));
+    return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+}
+
+/* ====== 等级系统 ====== */
+function getLevel() {
+    var s = pMaxSize;
+    if (s < 24) return '鱼苗';
+    if (s < 34) return '小丑鱼';
+    if (s < 48) return '蓝唐王';
+    if (s < 65) return '河豚';
+    if (s < 88) return '海龟';
+    if (s < 115) return '剑鱼';
+    if (s < 150) return '鲨鱼';
+    if (s < 195) return '鲸鱼';
+    return '海怪';
+}
+
+/* ====== 绘制鱼 ====== */
+function drawOneFish(x, y, sz, clr, wobble, isPlayer) {
+    var s = Math.max(sz, 4);
+    ctx.save();
+    ctx.translate(x, y);
+
+    // 鱼身
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s, s * 0.58, 0, 0, 6.28);
+    ctx.fillStyle = clr;
+    ctx.fill();
+
+    // 鱼腹（浅色）
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.12, s * 0.65, s * 0.3, 0, 0, Math.PI);
+    ctx.fillStyle = colorShift(clr, 35);
+    ctx.fill();
+
+    // 尾巴（摆动）
+    var wag = Math.sin(wobble) * 0.35;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.75, 0);
+    ctx.quadraticCurveTo(-s * 1.1, -s * 0.45 + wag * s, -s * 1.4, -s * 0.55 + wag * s);
+    ctx.quadraticCurveTo(-s * 1.0, 0, -s * 1.4, s * 0.55 + wag * s);
+    ctx.quadraticCurveTo(-s * 1.1, s * 0.45 + wag * s, -s * 0.75, 0);
+    ctx.fillStyle = clr;
+    ctx.fill();
+
+    // 背鳍
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.15, -s * 0.5);
+    ctx.quadraticCurveTo(s * 0.1, -s * 0.9, s * 0.35, -s * 0.5);
+    ctx.fillStyle = colorShift(clr, -25);
+    ctx.fill();
+
+    // 胸鳍
+    ctx.beginPath();
+    ctx.ellipse(-s * 0.1, s * 0.35, s * 0.2, s * 0.1, 0.4, 0, 6.28);
+    ctx.fillStyle = colorShift(clr, -15);
+    ctx.fill();
+
+    // 眼睛
+    var eyeX = s * 0.42, eyeY = -s * 0.12, eyeR = s * 0.22;
+    ctx.beginPath();
+    ctx.arc(eyeX, eyeY, eyeR, 0, 6.28);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(eyeX + eyeR * 0.2, eyeY, eyeR * 0.55, 0, 6.28);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(eyeX + eyeR * 0.35, eyeY - eyeR * 0.2, eyeR * 0.2, 0, 6.28);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+
+    // 嘴巴
+    ctx.beginPath();
+    ctx.arc(s * 0.75, s * 0.08, s * 0.1, 0.3, 2.5);
+    ctx.strokeStyle = colorShift(clr, -50);
+    ctx.lineWidth = Math.max(1, s * 0.04);
+    ctx.stroke();
+
+    // 玩家光环
+    if (isPlayer) {
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 1.6, 0, 6.28);
+        ctx.fillStyle = 'rgba(0,212,255,0.08)';
+        ctx.fill();
+    }
+
+    ctx.restore();
+}
+
+/* ====== 绘制背景 ====== */
+function drawBg() {
+    // 深海渐变
+    var grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#040e1a');
+    grad.addColorStop(0.4, '#0a1e3d');
+    grad.addColorStop(0.7, '#0d2847');
+    grad.addColorStop(1, '#0a3255');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // 水波光线
+    ctx.save();
+    ctx.globalAlpha = 0.04;
+    for (var i = 0; i < 5; i++) {
+        var lx = (i * W / 4 + bgScroll * 0.15) % (W + 200) - 100;
+        ctx.beginPath();
+        ctx.moveTo(lx, 0);
+        ctx.lineTo(lx + 40, H);
+        ctx.lineTo(lx - 40, H);
+        ctx.closePath();
+        ctx.fillStyle = '#4fc3f7';
+        ctx.fill();
+    }
+    ctx.restore();
+
+    // 气泡
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+    for (var i = 0; i < 20; i++) {
+        var bx = (i * 137.5 + bgScroll * 0.08) % W;
+        var by = H - ((i * 197.3 + bgScroll * 0.5 + i * 50) % (H + 40));
+        var bs = 2 + (i % 5) * 1.5;
+        ctx.beginPath();
+        ctx.arc(bx, by, bs, 0, 6.28);
+        ctx.fillStyle = '#80deea';
+        ctx.fill();
+    }
+    ctx.restore();
+
+    // 海底海藻
+    for (var i = 0; i < 6; i++) {
+        var sx = W * (i + 0.5) / 6;
+        var sw = Math.sin(bgScroll * 0.008 + i * 1.3) * 18;
+        var sh = 80 + (i % 3) * 40;
+        ctx.beginPath();
+        ctx.moveTo(sx, H);
+        ctx.quadraticCurveTo(sx + sw, H - sh * 0.5, sx + sw * 0.6, H - sh);
+        ctx.strokeStyle = 'rgba(27,94,32,0.25)';
+        ctx.lineWidth = 3 + (i % 2) * 2;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+    }
+}
+
+/* ====== 绘制速度线 ====== */
+function drawSpeedLines() {
+    if (combo < 5) return;
+    var alpha = Math.min(0.25, (combo - 5) * 0.02);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#80deea';
+    ctx.lineWidth = 1;
+    for (var i = 0; i < 8; i++) {
+        var lx = Math.random() * W;
+        var ly = Math.random() * H * 0.6;
+        ctx.beginPath();
+        ctx.moveTo(lx, ly);
+        ctx.lineTo(lx + (Math.random() - 0.5) * 10, ly + 20 + Math.random() * 30);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+/* ====== 绘制UI ====== */
+function drawHUD() {
+    // 分数（左上）
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 22px "PingFang SC",sans-serif';
+    ctx.fillText('\u{1F41F} ' + score, 14, 14);
+
+    ctx.font = '14px "PingFang SC",sans-serif';
+    ctx.fillStyle = '#78909c';
+    ctx.fillText(Math.floor(distance) + ' m', 14, 42);
+
+    // 等级（顶部居中）
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 16px "PingFang SC",sans-serif';
+    ctx.fillStyle = '#ffd740';
+    ctx.fillText(getLevel(), W / 2, 14);
+
+    // 连击（右上）
+    if (combo > 0) {
+        ctx.textAlign = 'right';
+        var comboSize = Math.min(36, 20 + combo * 0.5);
+        ctx.font = 'bold ' + comboSize + 'px "PingFang SC",sans-serif';
+        // 连击颜色根据大小变化
+        var comboColor = combo < 5 ? '#ffb74d' : combo < 15 ? '#ff7043' : '#ff1744';
+        ctx.fillStyle = comboColor;
+        ctx.fillText('\u{1F525} x' + combo, W - 14, 12);
+
+        // 连击计时条
+        if (comboTimer > 0 && state === ST_PLAY) {
+            var barW = 80;
+            var barH = 4;
+            var barX = W - 14 - barW;
+            var barY = 16 + comboSize;
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = comboColor;
+            ctx.fillRect(barX, barY, barW * (comboTimer / COMBO_TIMEOUT), barH);
+        }
+    }
+
+    // 速度百分比
+    if (curSpeed > baseSpeed * 1.2) {
+        var spPct = Math.round(curSpeed / INIT_SPEED * 100);
+        ctx.textAlign = 'left';
+        ctx.font = 'bold 13px "PingFang SC",sans-serif';
+        ctx.fillStyle = spPct > 250 ? '#ff1744' : '#ff9100';
+        ctx.fillText('\u26A1 ' + spPct + '%', 14, H - 30);
+    }
+}
+
+function drawComboPopups() {
+    // 在玩家附近显示连击数
+    if (combo >= 3 && pAlive) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        var popScale = 1 + Math.sin(now * 0.008) * 0.08;
+        ctx.font = 'bold ' + Math.round(18 * popScale) + 'px "PingFang SC",sans-serif';
+        ctx.fillStyle = combo >= 15 ? 'rgba(255,23,68,0.6)' : combo >= 8 ? 'rgba(255,112,67,0.5)' : 'rgba(255,183,77,0.4)';
+        ctx.fillText('x' + combo, px, py - pSize - 20);
+        ctx.restore();
+    }
+}
+
+/* ====== 菜单 ====== */
+function drawMenu() {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // 标题动画
+    var ty = H * 0.25 + Math.sin(now * 0.003) * 6;
+    ctx.fillStyle = '#00e5ff';
+    ctx.font = 'bold 44px "PingFang SC",sans-serif';
+    ctx.fillText('\u{1F41F} \u5C0F\u9C7C\u5FEB\u8DD1', W / 2, ty);
+
+    ctx.fillStyle = '#607d8b';
+    ctx.font = '16px "PingFang SC",sans-serif';
+    ctx.fillText('\u8DD1\u5F97\u8D8A\u8FDC\uFF0C\u5403\u5F97\u8D8A\u723D\uFF01', W / 2, ty + 36);
+
+    // 演示鱼
+    var dt = now * 0.002;
+    drawOneFish(W / 2 + Math.sin(dt) * 40, H * 0.48, 28, '#00d4ff', dt * 3, false);
+    drawOneFish(W * 0.25, H * 0.42 + Math.cos(dt * 0.7) * 8, 12, '#4fc3f7', dt * 4, false);
+    drawOneFish(W * 0.75, H * 0.52 + Math.sin(dt * 0.9) * 8, 12, '#81c784', dt * 5, false);
+
+    // 按钮
+    drawButton('\u{1F3AE} \u5F00\u59CB\u6E38\u620F', W / 2, H * 0.68);
+
+    // 说明
+    ctx.fillStyle = '#455a64';
+    ctx.font = '13px "PingFang SC",sans-serif';
+    ctx.fillText('\u2190 \u5DE6\u53F3\u6ED1\u52A8\u63A7\u5236\u65B9\u5411 \u2192', W / 2, H * 0.80);
+    ctx.fillText('\u5403\u5C0F\u9C7C\u957F\u5927\uFF0C\u8EB2\u5F00\u5927\u9C7C\uFF01', W / 2, H * 0.80 + 22);
+}
+
+/* ====== 结算 ====== */
+function drawDeath() {
+    // 半透明遮罩
+    ctx.fillStyle = 'rgba(4,14,26,0.7)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = '#ff5252';
+    ctx.font = 'bold 36px "PingFang SC",sans-serif';
+    ctx.fillText('\u{1F988} \u88AB\u5927\u9C7C\u5403\u6389\u4E86\uFF01', W / 2, H * 0.22);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 28px "PingFang SC",sans-serif';
+    ctx.fillText('\u5F97\u5206\uFF1A' + score, W / 2, H * 0.33);
+
+    ctx.font = '17px "PingFang SC",sans-serif';
+    ctx.fillStyle = '#90a4ae';
+    ctx.fillText('\u8DDD\u79BB\uFF1A' + Math.floor(distance) + ' m', W / 2, H * 0.39);
+    ctx.fillText('\u6700\u9AD8\u8FDE\u51FB\uFF1A' + maxCombo + 'x', W / 2, H * 0.44);
+    ctx.fillText('\u6700\u7EC8\u5F62\u6001\uFF1A' + getLevel(), W / 2, H * 0.49);
+
+    drawButton('\u{1F504} \u518D\u6765\u4E00\u6B21', W / 2, H * 0.62);
+}
+
+function drawButton(text, bx, by) {
+    var bw = 180, bh = 50, br = 25;
+    // 按钮阴影
+    ctx.fillStyle = 'rgba(0,150,255,0.2)';
+    roundRect(ctx, bx - bw / 2 + 2, by - bh / 2 + 3, bw, bh, br);
+    ctx.fill();
+    // 按钮本体
+    ctx.fillStyle = '#0091ea';
+    roundRect(ctx, bx - bw / 2, by - bh / 2, bw, bh, br);
+    ctx.fill();
+    // 按钮高光
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    roundRect(ctx, bx - bw / 2, by - bh / 2, bw, bh / 2, br);
+    ctx.fill();
+    // 文字
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px "PingFang SC",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, bx, by + 1);
+}
+
+function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.lineTo(x + w - r, y);
+    c.arcTo(x + w, y, x + w, y + r, r);
+    c.lineTo(x + w, y + h - r);
+    c.arcTo(x + w, y + h, x + w - r, y + h, r);
+    c.lineTo(x + r, y + h);
+    c.arcTo(x, y + h, x, y + h - r, r);
+    c.lineTo(x, y + r);
+    c.arcTo(x, y, x + r, y, r);
+    c.closePath();
+}
+
+/* ====== 更新逻辑 ====== */
+function update(dt) {
+    if (state !== ST_PLAY) return;
+
+    // 速度系统
+    baseSpeed = INIT_SPEED + distance * 0.0015;
+    baseSpeed = Math.min(baseSpeed, 5.5);
+    var comboMult = 1 + combo * 0.02;
+    curSpeed = baseSpeed * Math.min(comboMult, MAX_SPEED_MULT);
+
+    // 距离
+    distance += curSpeed * dt * 0.08;
+
+    // 连击倒计时
+    if (combo > 0) {
+        comboTimer -= dt;
+        if (comboTimer <= 0) {
+            combo = 0;
+            comboTimer = 0;
+        }
+    }
+
+    // 玩家移动
+    if (inputActive) {
+        var dx = inputX - px;
+        pvx += dx * 0.18;
+        pvx *= 0.72;
+    } else {
+        pvx *= 0.88;
+    }
+    px += pvx;
+    var margin = pSize + 5;
+    if (px < margin) { px = margin; pvx = 0; }
+    if (px > W - margin) { px = W - margin; pvx = 0; }
+
+    pWobble += dt * 9;
+    pSize = pMaxSize * 0.7 + Math.sin(now * 0.005) * pMaxSize * 0.05;
+
+    // 玩家尾迹
+    if (pAlive) {
+        pTrail.push({x: px, y: py, life: 12, maxLife: 12, size: pSize * 0.4});
+        if (pTrail.length > 15) pTrail.shift();
+    }
+    for (var i = pTrail.length - 1; i >= 0; i--) {
+        pTrail[i].life -= dt * 30;
+        if (pTrail[i].life <= 0) pTrail.splice(i, 1);
+    }
+
+    // 生成鱼
+    spawnCD -= dt;
+    if (spawnCD <= 0) {
+        spawnFish();
+        var interval = 0.35 + Math.random() * 0.4 - distance * 0.00015;
+        spawnCD = Math.max(0.12, interval);
+    }
+
+    // 更新鱼
+    for (var i = fishes.length - 1; i >= 0; i--) {
+        var f = fishes[i];
+        f.y += (f.vy + curSpeed) * dt * 28;
+        f.x += f.vx * dt * 28;
+        f.wobble += dt * 7;
+
+        if (f.x < f.size + 5) { f.x = f.size + 5; f.vx = Math.abs(f.vx); }
+        if (f.x > W - f.size - 5) { f.x = W - f.size - 5; f.vx = -Math.abs(f.vx); }
+
+        if (f.y > H + 60) { fishes.splice(i, 1); continue; }
+
+        // 碰撞
+        if (!pAlive) continue;
+        if (collide(px, py, pSize, f.x, f.y, f.size)) {
+            if (f.type === 1) {
+                // 炸弹鱼：减速
+                curSpeed *= 0.5;
+                baseSpeed *= 0.7;
+                combo = 0;
+                spawnParticles(f.x, f.y, '#ff6d00', 12);
+                fishes.splice(i, 1);
+                continue;
+            }
+            if (f.type === 2) {
+                // 漩涡：加速
+                curSpeed *= 1.5;
+                spawnParticles(f.x, f.y, '#aa00ff', 12);
+                fishes.splice(i, 1);
+                continue;
+            }
+            if (f.size <= pMaxSize * 1.1) {
+                // 吃掉！
+                var pts = Math.ceil(f.size);
+                if (f.type === 0) pts *= 5; // 金色鱼
+                score += pts * (1 + Math.floor(combo / 5)); // 连击倍率
+                combo++;
+                comboTimer = COMBO_TIMEOUT;
+                if (combo > maxCombo) maxCombo = combo;
+                pMaxSize += f.size * PLAYER_GROW_FACTOR;
+
+                spawnParticles(f.x, f.y, f.color, 6 + combo);
+                if (f.type === 0) spawnParticles(f.x, f.y, '#ffd700', 12);
+                fishes.splice(i, 1);
+            } else {
+                // 撞到大鱼
+                die();
+            }
+        }
+    }
+
+    // 屏幕震动衰减
+    if (shakeAmt > 0) shakeAmt *= 0.88;
+    if (shakeAmt < 0.3) shakeAmt = 0;
+
+    // 更新粒子
+    for (var i = particles.length - 1; i >= 0; i--) {
+        var p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.05; // 重力
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+}
+
+/* ====== 渲染 ====== */
+function render() {
+    ctx.save();
+
+    // 屏幕震动
+    if (shakeAmt > 0) {
+        ctx.translate(
+            (Math.random() - 0.5) * shakeAmt,
+            (Math.random() - 0.5) * shakeAmt
+        );
+    }
+
+    drawBg();
+    drawSpeedLines();
+
+    // 玩家尾迹
+    for (var i = 0; i < pTrail.length; i++) {
+        var t = pTrail[i];
+        ctx.save();
+        ctx.globalAlpha = (t.life / t.maxLife) * 0.15;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, t.size, 0, 6.28);
+        ctx.fillStyle = pColor;
+        ctx.fill();
+        ctx.restore();
+    }
+
+    // 绘制所有鱼（先画远的/小的）
+    for (var i = 0; i < fishes.length; i++) {
+        var f = fishes[i];
+        var fdir = f.vx >= 0 ? 1 : -1;
+        ctx.save();
+        if (fdir < 0) { ctx.translate(f.x, f.y); ctx.scale(-1, 1); ctx.translate(-f.x, -f.y); }
+        drawOneFish(f.x, f.y, f.size, f.color, f.wobble, false);
+        ctx.restore();
+
+        // 大鱼标记（红色边框提示）
+        if (f.size > pMaxSize * 1.1 && state === ST_PLAY) {
+            ctx.save();
+            ctx.globalAlpha = 0.3 + Math.sin(now * 0.01) * 0.15;
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, f.size * 1.2, 0, 6.28);
+            ctx.strokeStyle = '#ff5252';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.restore();
+        }
+        // 可吃鱼标记（绿色微光）
+        if (f.size <= pMaxSize * 1.1 && f.type !== 1 && state === ST_PLAY) {
+            ctx.save();
+            ctx.globalAlpha = 0.12;
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, f.size * 1.15, 0, 6.28);
+            ctx.strokeStyle = '#69f0ae';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    // 玩家
+    if (state === ST_PLAY || state === ST_DEAD) {
+        if (pAlive) {
+            drawOneFish(px, py, pSize, pColor, pWobble, true);
+            drawComboPopups();
+        }
+    }
+
+    // 粒子
+    for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        ctx.save();
+        ctx.globalAlpha = p.life / p.maxLife;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(0.5, p.size * (p.life / p.maxLife)), 0, 6.28);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+        ctx.restore();
+    }
+
+    ctx.restore(); // 震动restore
+
+    // UI不受震动影响
+    if (state === ST_MENU) { drawMenu(); }
+    else { drawHUD(); if (state === ST_DEAD) drawDeath(); }
+}
+
+/* ====== 主循环 ====== */
+var lastTs = 0;
+
+function loop(ts) {
+    now = ts || 0;
+    var dt = Math.min((ts - lastTs) / 1000, 0.05);
+    lastTs = ts;
+    bgScroll += curSpeed * dt * 30;
+
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+}
+
+lastTs = performance.now();
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
