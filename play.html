@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>小鱼快跑</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #020a18; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ========== 基础初始化 ==========
+var canvas = document.getElementById('game');
+var ctx = canvas.getContext('2d');
+var W = 0, H = 0;
+
+function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ========== 游戏状态 ==========
+var STATE_MENU = 0;
+var STATE_PLAY = 1;
+var STATE_DEAD = 2;
+var gameState = STATE_MENU;
+
+// ========== 玩家数据 ==========
+var player = {
+    x: 100, y: 100,
+    size: 20,
+    hp: 100, maxHp: 100,
+    vx: 0, vy: 0,
+    angle: 0,
+    alive: true
+};
+
+// ========== 输入处理 ==========
+var joystick = { active: false, dx: 0, dy: 0, x: 80, y: 0, radius: 50 };
+var biteButton = { pressed: false, x: 0, y: 0, radius: 40 };
+
+function updateInputPositions() {
+    joystick.y = H - 100;
+    biteButton.x = W - 60;
+    biteButton.y = H - 100;
+}
+
+// 触摸处理
+canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    for (var i = 0; i < e.touches.length; i++) {
+        var t = e.touches[i];
+        var x = t.clientX, y = t.clientY;
+        
+        // 摇杆区域
+        var jdx = x - joystick.x;
+        var jdy = y - joystick.y;
+        if (Math.sqrt(jdx*jdx + jdy*jdy) < joystick.radius + 20) {
+            joystick.active = true;
+            continue;
+        }
+        
+        // 撕咬按钮
+        var bdx = x - biteButton.x;
+        var bdy = y - biteButton.y;
+        if (Math.sqrt(bdx*bdx + bdy*bdy) < biteButton.radius + 10) {
+            biteButton.pressed = true;
+            continue;
+        }
+    }
+    
+    if (gameState === STATE_MENU) {
+        startGame();
+    } else if (gameState === STATE_DEAD) {
+        gameState = STATE_MENU;
+    }
+}, {passive: false});
+
+canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    for (var i = 0; i < e.touches.length; i++) {
+        var t = e.touches[i];
+        var x = t.clientX, y = t.clientY;
+        
+        if (joystick.active) {
+            var dx = x - joystick.x;
+            var dy = y - joystick.y;
+            var dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist > joystick.radius) {
+                dx = dx / dist * joystick.radius;
+                dy = dy / dist * joystick.radius;
+            }
+            joystick.dx = dx / joystick.radius;
+            joystick.dy = dy / joystick.radius;
+        }
+    }
+}, {passive: false});
+
+canvas.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    joystick.active = false;
+    joystick.dx = 0;
+    joystick.dy = 0;
+    biteButton.pressed = false;
+}, {passive: false});
+
+// 鼠标支持
+canvas.addEventListener('mousedown', function(e) {
+    var x = e.clientX, y = e.clientY;
+    
+    var jdx = x - joystick.x;
+    var jdy = y - joystick.y;
+    if (Math.sqrt(jdx*jdx + jdy*jdy) < joystick.radius + 20) {
+        joystick.active = true;
+    }
+    
+    var bdx = x - biteButton.x;
+    var bdy = y - biteButton.y;
+    if (Math.sqrt(bdx*bdx + bdy*bdy) < biteButton.radius + 10) {
+        biteButton.pressed = true;
+    }
+    
+    if (gameState === STATE_MENU) startGame();
+    else if (gameState === STATE_DEAD) gameState = STATE_MENU;
+});
+
+canvas.addEventListener('mousemove', function(e) {
+    if (joystick.active) {
+        var dx = e.clientX - joystick.x;
+        var dy = e.clientY - joystick.y;
+        var dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist > joystick.radius) {
+            dx = dx / dist * joystick.radius;
+            dy = dy / dist * joystick.radius;
+        }
+        joystick.dx = dx / joystick.radius;
+        joystick.dy = dy / joystick.radius;
+    }
+});
+
+canvas.addEventListener('mouseup', function() {
+    joystick.active = false;
+    joystick.dx = 0;
+    joystick.dy = 0;
+    biteButton.pressed = false;
+});
+
+// ========== 游戏逻辑 ==========
+var fishes = [];
+var chunks = [];
+var particles = [];
+var score = 0;
+var combo = 0;
+
+function startGame() {
+    gameState = STATE_PLAY;
+    player.x = W / 2;
+    player.y = H / 2;
+    player.hp = 100;
+    player.alive = true;
+    fishes = [];
+    chunks = [];
+    particles = [];
+    score = 0;
+    combo = 0;
+    updateInputPositions();
+}
+
+function spawnFish() {
+    if (Math.random() > 0.02) return;
+    
+    var types = [
+        { size: 10, color: '#ff7043', hp: 20 },
+        { size: 15, color: '#4fc3f7', hp: 35 },
+        { size: 20, color: '#ffeb3b', hp: 50 },
+        { size: 30, color: '#ab47bc', hp: 80 }
+    ];
+    
+    var type = types[Math.floor(Math.random() * types.length)];
+    var side = Math.floor(Math.random() * 4);
+    var x, y, vx, vy;
+    
+    switch(side) {
+        case 0: x = Math.random() * W; y = -type.size; vx = (Math.random() - 0.5) * 2; vy = 1 + Math.random(); break;
+        case 1: x = W + type.size; y = Math.random() * H; vx = -(1 + Math.random()); vy = (Math.random() - 0.5) * 2; break;
+        case 2: x = Math.random() * W; y = H + type.size; vx = (Math.random() - 0.5) * 2; vy = -(1 + Math.random()); break;
+        case 3: x = -type.size; y = Math.random() * H; vx = 1 + Math.random(); vy = (Math.random() - 0.5) * 2; break;
+    }
+    
+    fishes.push({
+        x: x, y: y,
+        vx: vx, vy: vy,
+        size: type.size,
+        color: type.color,
+        hp: type.hp,
+        maxHp: type.hp
+    });
+}
+
+function update() {
+    if (gameState !== STATE_PLAY) return;
+    
+    // 玩家移动
+    if (joystick.active) {
+        player.vx += joystick.dx * 0.5;
+        player.vy += joystick.dy * 0.5;
+    }
+    player.vx *= 0.9;
+    player.vy *= 0.9;
+    player.x += player.vx;
+    player.y += player.vy;
+    
+    // 边界限制
+    player.x = Math.max(player.size, Math.min(W - player.size, player.x));
+    player.y = Math.max(player.size, Math.min(H - player.size, player.y));
+    
+    // 更新角度
+    if (Math.abs(player.vx) > 0.1 || Math.abs(player.vy) > 0.1) {
+        player.angle = Math.atan2(player.vy, player.vx);
+    }
+    
+    // 生成鱼
+    spawnFish();
+    
+    // 更新鱼
+    for (var i = fishes.length - 1; i >= 0; i--) {
+        var f = fishes[i];
+        f.x += f.vx;
+        f.y += f.vy;
+        
+        // 移除屏幕外的鱼
+        if (f.x < -50 || f.x > W + 50 || f.y < -50 || f.y > H + 50) {
+            fishes.splice(i, 1);
+            continue;
+        }
+        
+        // 碰撞检测
+        var dx = player.x - f.x;
+        var dy = player.y - f.y;
+        var dist = Math.sqrt(dx*dx + dy*dy);
+        
+        if (dist < player.size + f.size && player.alive) {
+            if (player.size >= f.size) {
+                // 吃掉鱼
+                player.size += 0.5;
+                player.hp = Math.min(player.maxHp, player.hp + 10);
+                score += Math.floor(f.size);
+                combo++;
+                
+                // 生成鱼块
+                var chunkCount = 3 + Math.floor(f.size / 10);
+                for (var j = 0; j < chunkCount; j++) {
+                    var angle = Math.random() * Math.PI * 2;
+                    var speed = 1 + Math.random() * 2;
+                    chunks.push({
+                        x: f.x + Math.cos(angle) * f.size * 0.5,
+                        y: f.y + Math.sin(angle) * f.size * 0.5,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        size: 4 + Math.random() * 4,
+                        color: f.color,
+                        life: 300,
+                        value: Math.floor(f.size / chunkCount)
+                    });
+                }
+                
+                fishes.splice(i, 1);
+            } else {
+                // 被大鱼吃
+                gameState = STATE_DEAD;
+            }
+        }
+    }
+    
+    // 更新鱼块
+    for (var i = chunks.length - 1; i >= 0; i--) {
+        var c = chunks[i];
+        c.x += c.vx;
+        c.y += c.vy;
+        c.vx *= 0.95;
+        c.vy *= 0.95;
+        c.life--;
+        
+        // 玩家吃块
+        var dx = player.x - c.x;
+        var dy = player.y - c.y;
+        if (Math.sqrt(dx*dx + dy*dy) < player.size + c.size) {
+            player.size += 0.1;
+            score += c.value;
+            chunks.splice(i, 1);
+            continue;
+        }
+        
+        if (c.life <= 0) {
+            chunks.splice(i, 1);
+        }
+    }
+    
+    // 更新粒子
+    for (var i = particles.length - 1; i >= 0; i--) {
+        var p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+}
+
+// ========== 绘制函数 ==========
+function drawBackground() {
+    // 渐变背景
+    var grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#010812');
+    grad.addColorStop(0.5, '#081e3d');
+    grad.addColorStop(1, '#0d2847');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    
+    // 气泡
+    ctx.save();
+    ctx.globalAlpha = 0.1;
+    for (var i = 0; i < 20; i++) {
+        var x = (i * 50 + Date.now() * 0.02) % W;
+        var y = H - ((i * 30 + Date.now() * 0.1) % (H + 50));
+        ctx.beginPath();
+        ctx.arc(x, y, 2 + (i % 4), 0, Math.PI * 2);
+        ctx.fillStyle = '#80deea';
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+function drawFish(x, y, size, color, angle, hp, maxHp, isPlayer) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    
+    // 身体
+    ctx.beginPath();
+    ctx.ellipse(0, 0, size, size * 0.6, 0, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    
+    // 尾巴
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.8, 0);
+    ctx.lineTo(-size * 1.3, -size * 0.4);
+    ctx.lineTo(-size * 1.3, size * 0.4);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    
+    // 眼睛
+    ctx.beginPath();
+    ctx.arc(size * 0.5, -size * 0.2, size * 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'white';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(size * 0.6, -size * 0.2, size * 0.1, 0, Math.PI * 2);
+    ctx.fillStyle = 'black';
+    ctx.fill();
+    
+    ctx.restore();
+    
+    // 血条
+    if (!isPlayer && hp < maxHp) {
+        var barWidth = size * 2;
+        var barHeight = 4;
+        var barX = x - barWidth / 2;
+        var barY = y - size - 10;
+        var ratio = hp / maxHp;
+        
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
+        ctx.fillStyle = ratio > 0.5 ? '#4caf50' : ratio > 0.25 ? '#ff9800' : '#f44336';
+        ctx.fillRect(barX, barY, barWidth * ratio, barHeight);
+    }
+}
+
+function drawJoystick() {
+    // 底盘
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath();
+    ctx.arc(joystick.x, joystick.y, joystick.radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#263238';
+    ctx.fill();
+    ctx.strokeStyle = '#546e7a';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // 摇杆头
+    var knobX = joystick.x + joystick.dx * joystick.radius * 0.6;
+    var knobY = joystick.y + joystick.dy * joystick.radius * 0.6;
+    ctx.globalAlpha = joystick.active ? 0.8 : 0.5;
+    ctx.beginPath();
+    ctx.arc(knobX, knobY, 20, 0, Math.PI * 2);
+    ctx.fillStyle = '#00e5ff';
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawBiteButton() {
+    ctx.save();
+    ctx.translate(biteButton.x, biteButton.y);
+    
+    // 外圈
+    ctx.beginPath();
+    ctx.arc(0, 0, biteButton.radius, 0, Math.PI * 2);
+    ctx.fillStyle = biteButton.pressed ? 'rgba(244,67,54,0.6)' : 'rgba(244,67,54,0.3)';
+    ctx.fill();
+    
+    // 图标
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🦷', 0, 0);
+    
+    ctx.restore();
+}
+
+function drawHUD() {
+    // 分数
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('🐟 ' + score, 10, 30);
+    
+    // 玩家血条
+    if (player.alive) {
+        var barWidth = 100;
+        var barHeight = 8;
+        var barX = 10;
+        var barY = 45;
+        var ratio = player.hp / player.maxHp;
+        
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(barX, barY, barWidth, barHeight);
+        ctx.fillStyle = ratio > 0.5 ? '#00e676' : ratio > 0.25 ? '#ff9800' : '#f44336';
+        ctx.fillRect(barX, barY, barWidth * ratio, barHeight);
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(barX, barY, barWidth, barHeight);
+    }
+    
+    // 摇杆和按钮
+    drawJoystick();
+    drawBiteButton();
+}
+
+function drawMenu() {
+    ctx.fillStyle = '#00e5ff';
+    ctx.font = 'bold 40px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🐟 小鱼快跑', W / 2, H / 3);
+    
+    ctx.fillStyle = '#78909c';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('摇杆移动 · 靠近吃鱼 · 🦷撕咬', W / 2, H / 3 + 40);
+    
+    // 示例鱼
+    drawFish(W / 2, H / 2, 30, '#00d4ff', 0, 100, 100, false);
+    
+    ctx.fillStyle = 'white';
+    ctx.font = '20px sans-serif';
+    ctx.fillText('点击开始', W / 2, H * 0.7);
+}
+
+function drawGame() {
+    drawBackground();
+    
+    // 绘制鱼块
+    for (var i = 0; i < chunks.length; i++) {
+        var c = chunks[i];
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, c.life / 60);
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, c.size, 0, Math.PI * 2);
+        ctx.fillStyle = c.color;
+        ctx.fill();
+        ctx.restore();
+    }
+    
+    // 绘制鱼
+    for (var i = 0; i < fishes.length; i++) {
+        var f = fishes[i];
+        var angle = Math.atan2(f.vy, f.vx);
+        drawFish(f.x, f.y, f.size, f.color, angle, f.hp, f.maxHp, false);
+    }
+    
+    // 绘制玩家
+    if (player.alive) {
+        drawFish(player.x, player.y, player.size, '#00d4ff', player.angle, player.hp, player.maxHp, true);
+    }
+    
+    // 绘制粒子
+    ctx.save();
+    for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        ctx.globalAlpha = p.life / 30;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+    }
+    ctx.restore();
+    
+    drawHUD();
+}
+
+function drawDead() {
+    drawBackground();
+    
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+    
+    ctx.fillStyle = '#ff5252';
+    ctx.font = 'bold 36px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🦈 被吃掉了!', W / 2, H / 3);
+    
+    ctx.fillStyle = 'white';
+    ctx.font = '24px sans-serif';
+    ctx.fillText('得分: ' + score, W / 2, H / 2);
+    
+    ctx.fillStyle = '#78909c';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('点击返回菜单', W / 2, H * 0.65);
+}
+
+// ========== 主循环 ==========
+function loop() {
+    update();
+    
+    if (gameState === STATE_MENU) {
+        drawMenu();
+    } else if (gameState === STATE_PLAY) {
+        drawGame();
+    } else if (gameState === STATE_DEAD) {
+        drawDead();
+    }
+    
+    requestAnimationFrame(loop);
+}
+
+// 启动
+updateInputPositions();
+loop();
+</script>
+</body>
+</html>
