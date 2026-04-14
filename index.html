@@ -12,10 +12,11 @@ canvas{display:block}
 </head>
 <body>
 <canvas id="cv"></canvas>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script>
 var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=0,H=0;
 function resize(){W=cv.width=window.innerWidth;H=cv.height=window.innerHeight}
-window.addEventListener('resize',resize);resize();
+window.addEventListener('resize',resize);resize();JOY.cy=H-105;BTN_BITE.x=W-65;BTN_BITE.y=H-105;
 
 /* ====== 常量 ====== */
 var INIT_SPEED=2.5,MAX_SPEED_MULT=3.5,COMBO_TIMEOUT=2.5;
@@ -29,14 +30,14 @@ var baseSpeed=INIT_SPEED,curSpeed=INIT_SPEED,spawnCD=0;
 var shakeAmt=0,bgScroll=0,now=0;
 
 /* ====== 玩家 ====== */
-var px=0,py=0,pSize=18,pMaxSize=18,pvx=0,pAlive=true,pWobble=0;
+var px=0,py=0,pSize=18,pMaxSize=18,P.vx=0;P.vy=0,pAlive=true,P.wb=0;
 var pColor='#00d4ff',pTrail=[];
 var skillCDs=[0,0,0,0],skillActives=[0,0,0,0];
 var magnetRange=0,invTime=0,dashTime=0,slowTime=0;
 var playerLevel=0,exp=0,expNext=100;
 
 /* ====== 池 ====== */
-var fishes=[],particles=[],floats=[],powerUps=[];
+var fishes=[],particles=[],floats=[],powerUps=[],chunks=[];
 
 /* ====== 输入 ====== */
 var inputOn=false,inputX=0,inputY=0;
@@ -44,17 +45,50 @@ var btnR=28,btnY2=0,btnList=[];
 
 function touchXY(t){var r=cv.getBoundingClientRect();return{x:t.clientX-r.left,y:t.clientY-r.top}}
 
+/* Joystick */
+var JOY={cx:85,cy:0,baseR:50,knobR:20,active:false,kx:0,ky:0,dx:0,dy:0,jid:null};
+var BTN_BITE={x:0,y:0,r:40,active:false,jid:null,pressing:false};
 cv.addEventListener('touchstart',function(e){
-  e.preventDefault();var t=e.touches[0];inputOn=true;inputX=t.clientX;inputY=t.clientY;
-  var p=touchXY(t);hitBtn(p.x,p.y);
-  if(state===ST_MENU){startGame();return}
-  if(state===ST_DEAD){goMenu();return}
+  e.preventDefault();initAudio();
+  for(var i=0;i<e.changedTouches.length;i++){
+    var t=e.changedTouches[i],tx=t.clientX,ty=t.clientY;
+    if(state===ST.MENU){startGame();return}if(state===ST_DEAD){goMenu();return}
+    var jdx=tx-JOY.cx,jdy=ty-JOY.cy;if(Math.sqrt(jdx*jdx+jdy*jdy)<JOY.baseR+25){JOY.active=true;JOY.jid=t.identifier;JOY.kx=JOY.cx;JOY.ky=JOY.cy;continue}
+    var bdx=tx-BTN_BITE.x,bdy=ty-BTN_BITE.y;if(Math.sqrt(bdx*bdx+bdy*bdy)<BTN_BITE.r+12){BTN_BITE.active=true;BTN_BITE.jid=t.identifier;BTN_BITE.pressing=true;doBite();continue}
+    hitBtn(tx,ty)
+  }
 },{passive:false});
-cv.addEventListener('touchmove',function(e){e.preventDefault();if(inputOn)inputX=e.touches[0].clientX},{passive:false});
-cv.addEventListener('touchend',function(e){e.preventDefault();inputOn=false},{passive:false});
-cv.addEventListener('mousedown',function(e){inputOn=true;inputX=e.clientX;inputY=e.clientY;hitBtn(inputX,inputY);if(state===ST_MENU){startGame();return}if(state===ST_DEAD){goMenu();return}});
-cv.addEventListener('mousemove',function(e){if(inputOn)inputX=e.clientX});
-cv.addEventListener('mouseup',function(){inputOn=false});
+cv.addEventListener('touchmove',function(e){
+  e.preventDefault();
+  for(var i=0;i<e.changedTouches.length;i++){var t=e.changedTouches[i];if(JOY.active&&t.identifier===JOY.jid){var dx=t.clientX-JOY.cx,dy=t.clientY-JOY.cy,d=Math.sqrt(dx*dx+dy*dy),maxD=JOY.baseR;if(d>maxD){dx=dx/d*maxD;dy=dy/d*maxD}JOY.kx=JOY.cx+dx;JOY.ky=JOY.cy+dy;JOY.dx=dx/maxD;JOY.dy=dy/maxD}}
+},{passive:false});
+cv.addEventListener('touchend',function(e){
+  e.preventDefault();
+  for(var i=0;i<e.changedTouches.length;i++){var t=e.changedTouches[i];if(JOY.active&&t.identifier===JOY.jid){JOY.active=false;JOY.dx=0;JOY.dy=0;JOY.kx=JOY.cx;JOY.ky=JOY.cy}if(BTN_BITE.active&&t.identifier===BTN_BITE.jid){BTN_BITE.active=false;BTN_BITE.pressing=false}}
+},{passive:false});
+cv.addEventListener('mousedown',function(e){initAudio();if(state===ST.MENU){startGame();return}if(state===ST.DEAD){goMenu();return}var tx=e.clientX,ty=e.clientY;var jdx=tx-JOY.cx,jdy=ty-JOY.cy;if(Math.sqrt(jdx*jdx+jdy*jdy)<JOY.baseR+25){JOY.active=true;JOY.kx=JOY.cx;JOY.ky=JOY.cy;return}var bdx=tx-BTN_BITE.x,bdy=ty-BTN_BITE.y;if(Math.sqrt(bdx*bdx+bdy*bdy)<BTN_BITE.r+12){BTN_BITE.pressing=true;doBite();return}hitBtn(tx,ty)});
+cv.addEventListener('mousemove',function(e){if(JOY.active){var dx=e.clientX-JOY.cx,dy=e.clientY-JOY.cy,d=Math.sqrt(dx*dx+dy*dy),maxD=JOY.baseR;if(d>maxD){dx=dx/d*maxD;dy=dy/d*maxD}JOY.kx=JOY.cx+dx;JOY.ky=JOY.cy+dy;JOY.dx=dx/maxD;JOY.dy=dy/maxD}});
+cv.addEventListener('mouseup',function(){JOY.active=false;JOY.dx=0;JOY.dy=0;JOY.kx=JOY.cx;JOY.ky=JOY.cy;BTN_BITE.pressing=false});
+
+function doBite(){
+  if(P.biteCD>0||!P.alive)return;P.biteCD=0.3;P.biteAnim=1;playSound('bite');
+  spawnPart(P.x+Math.cos(P.angle)*P.sz,P.y+Math.sin(P.angle)*P.sz,'#ff7043',5,3);
+  var bx=P.x+Math.cos(P.angle)*P.sz*1.2,by=P.y+Math.sin(P.angle)*P.sz*1.2;
+  for(var i=fishes.length-1;i>=0;i--){
+    var f=fishes[i];if(hit(bx,by,P.sz*0.5,f.x,f.y,f.sz)){
+      f.hp-=0.3*P.maxSz;playSound('hit');spawnPart(f.x,f.y,'#ff5252',4,2);shakeAmt=Math.max(shakeAmt,2);
+      combo++;comboTimer=2;if(combo>maxCombo)maxCombo=combo;if(combo%10===0){playSound('combo');addFloat(P.x,P.y-50,'🔥 '+combo+'连击!','#ff1744',26)}
+      if(f.hp<=0){fishToChunks(f);playSound('death');score+=Math.ceil(f.sz*2);exp+=f.ft.xp;checkLvUp();addFloat(f.x,f.y-f.sz,'+'+Math.ceil(f.sz*2),'#ffd740',22)}
+      break
+    }
+  }
+}
+function fishToChunks(f){
+  var n=3+Math.floor(f.sz/8);
+  for(var i=0;i<n;i++){var a=Math.random()*6.28,spd=0.8+Math.random()*1.5;
+    chunks.push({x:f.x+Math.cos(a)*f.sz*0.3,y:f.y+Math.sin(a)*f.sz*0.3,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,sz:4+f.sz*0.1,color:f.c[0],l:200,wb:Math.random()*6.28,val:Math.ceil(f.sz/n)})}
+  spawnPart(f.x,f.y,f.c[0],12,4);fishes.splice(fishes.indexOf(f),1)
+}
 
 function hitBtn(x,y){
   if(state!==ST_PLAY)return;
@@ -77,13 +111,13 @@ function useSkill(i){
 function startGame(){
   state=ST_PLAY;score=0;distance=0;combo=0;maxCombo=0;comboTimer=0;
   baseSpeed=INIT_SPEED;curSpeed=INIT_SPEED;spawnCD=0;shakeAmt=0;
-  px=W/2;py=H*0.72;pSize=18;pMaxSize=18;pAlive=true;pvx=0;pWobble=0;
+  px=W/2;py=H*0.72;pSize=18;pMaxSize=18;pAlive=true;P.vx=0;P.vy=0;P.wb=0;
   pTrail=[];skillCDs=[0,0,0,0];skillActives=[0,0,0,0];
   magnetRange=0;invTime=0;dashTime=0;slowTime=0;
   playerLevel=0;exp=0;expNext=100;
-  fishes=[];particles=[];floats=[];powerUps=[];
+  fishes=[];particles=[];floats=[];powerUps=[];chunks=[];
 }
-function goMenu(){state=ST_MENU;fishes=[];particles=[];floats=[];powerUps=[];pTrail=[]}
+function goMenu(){state=ST_MENU;fishes=[];particles=[];floats=[];powerUps=[];chunks=[];pTrail=[]}
 function die(){if(invTime>0)return;pAlive=false;shakeAmt=16;spawnPart(px,py,pColor,40,6);spawnPart(px,py,'#ff1744',20,4);state=ST_DEAD}
 
 /* ====== 进化 ====== */
@@ -377,9 +411,13 @@ function update(dt){
 
   if(combo>0){comboTimer-=dt;if(comboTimer<=0){combo=0;comboTimer=0}}
 
-  if(inputOn){pvx+=(inputX-px)*0.15;pvx*=0.75}else pvx*=0.88;
-  px+=pvx;var m=pSize+10;if(px<m){px=m;pvx=0}if(px>W-m){px=W-m;pvx=0}
-  pWobble+=dt*10;pSize=pMaxSize*0.75+Math.sin(now*0.005)*pMaxSize*0.08;
+  // Joystick 4-directional movement
+  if(JOY.active){P.vx+=JOY.dx*0.8;P.vy+=JOY.dy*0.8;P.vx*=0.8;P.vy*=0.8;if(Math.abs(JOY.dx)>0.1||Math.abs(JOY.dy)>0.1)P.angle=Math.atan2(JOY.dy,JOY.dx)}
+  else{P.vx*=0.88;P.vy*=0.88}
+  px+=P.vx;py+=P.vy;
+  var m=P.size+10;if(px<m){px=m;P.vx=0}if(px>W-m){px=W-m;P.vx=0}if(py<m+50){py=m+50;P.vy=0}if(py>H-m-10){py=H-m-10;P.vy=0}
+  px+=pvx;var m=pSize+10;if(px<m){px=m;P.vx=0;P.vy=0}if(px>W-m){px=W-m;P.vx=0;P.vy=0}
+  P.wb+=dt*10;pSize=pMaxSize*0.75+Math.sin(now*0.005)*pMaxSize*0.08;
 
   if(pAlive){pTrail.push({x:px,y:py,l:15,ml:15,sz:pSize*0.3});if(pTrail.length>20)pTrail.shift()}
   for(var i=pTrail.length-1;i>=0;i--){pTrail[i].l-=dt*25;if(pTrail[i].l<=0)pTrail.splice(i,1)}
@@ -432,16 +470,12 @@ function update(dt){
     }
   }
 
+  // Update chunks
+  for(var i=chunks.length-1;i>=0;i--){var ch=chunks[i];ch.x+=ch.vx;ch.y+=ch.vy;ch.vx*=0.98;ch.vy*=0.98;ch.wb+=0.05;ch.l--;if(ch.l<=0||ch.y>H+30||ch.y<-30)chunks.splice(i,1)}
+  
   if(shakeAmt>0){shakeAmt*=0.88;if(shakeAmt<0.3)shakeAmt=0}
-
-  for(var i=particles.length-1;i>=0;i--){
-    var p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.l--;
-    if(p.l<=0)particles.splice(i,1)
-  }
-  for(var i=floats.length-1;i>=0;i--){
-    var f=floats[i];f.y+=f.vy;f.l--;
-    if(f.l<=0)floats.splice(i,1)
-  }
+  for(var i=particles.length-1;i>=0;i--){var p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.l--;if(p.l<=0)particles.splice(i,1)}
+  for(var i=floats.length-1;i>=0;i--){var f=floats[i];f.y+=f.vy;f.l--;if(f.l<=0)floats.splice(i,1)}
 }
 
 /* ====== 渲染 ====== */
@@ -468,8 +502,11 @@ function render(){
   // 道具
   for(var i=0;i<powerUps.length;i++)drawPU(powerUps[i]);
 
+    // 鱼块
+  for(var i=0;i<chunks.length;i++){var ch=chunks[i];G.save();G.globalAlpha=0.8;G.beginPath();G.arc(ch.x,ch.y,ch.sz,0,6.28);G.fillStyle=ch.color;G.fill();G.strokeStyle=cShift(ch.color,30);G.lineWidth=1;G.stroke();G.restore();
+    if(P.alive&&hit(px,py,P.size,ch.x,ch.y,ch.sz)){P.maxSz+=ch.val*0.01;score+=ch.val;playSound('eat');addFloat(ch.x,ch.y-15,'+'+ch.val,'#69f0ae',14);spawnPart(ch.x,ch.y,'#fff',5,2);chunks.splice(i,1)}}
   // 玩家
-  if(pAlive)drawFish(px,py,pSize,pColor,pWobble,true,invTime>0);
+  if(P.alive)drawFish(px,py,P.size,pColor,P.wb,true,invTime>0);
 
   // 粒子
   for(var i=0;i<particles.length;i++){var p=particles[i];ctx.save();ctx.globalAlpha=p.l/p.ml;ctx.beginPath();ctx.arc(p.x,p.y,Math.max(0.5,p.sz*(p.l/p.ml)),0,6.28);ctx.fillStyle=p.c;ctx.fill();if(p.l/p.ml>0.5){ctx.globalAlpha=(p.l/p.ml-0.5)*0.3;ctx.beginPath();ctx.arc(p.x,p.y,p.sz*1.5*(p.l/p.ml),0,6.28);ctx.fillStyle=p.c;ctx.fill()}ctx.restore()}
