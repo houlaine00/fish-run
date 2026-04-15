@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>小鱼快跑 Pro</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#001122;touch-action:none;user-select:none}
+#gameCanvas{display:block;width:100%;height:100%}
+#rotate{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);color:#00e5ff;display:none;flex-direction:column;justify-content:center;align-items:center;z-index:9999;font-family:Arial}
+#ui{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none}
+#biteBtn{position:fixed;right:20px;bottom:100px;width:70px;height:70px;border-radius:50%;background:rgba(255,87,34,0.4);border:2px solid rgba(255,87,34,0.8);display:flex;align-items:center;justify-content:center;font-size:30px;pointer-events:auto;touch-action:none}
+#biteBtn:active{transform:scale(0.95)}
+#startScreen{position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,#001122 0%,#003344 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100}
+#startScreen h1{color:#00e5ff;font-size:48px;margin-bottom:20px;text-shadow:0 0 20px #00e5ff}
+#startScreen p{color:#78909c;font-size:16px;margin-bottom:40px}
+#startBtn{padding:15px 50px;background:#0091ea;color:#fff;border:none;border-radius:30px;font-size:22px;cursor:pointer;pointer-events:auto}
+#startBtn:hover{background:#00b0ff}
+</style>
+</head>
+<body>
+<div id="rotate"><p style="font-size:80px">📱</p><p style="font-size:22px;font-weight:bold">请旋转手机为横屏</p></div>
+<canvas id="gameCanvas"></canvas>
+<div id="ui"></div>
+<div id="startScreen">
+<h1>🐟 小鱼快跑</h1>
+<p>大鱼吃小鱼 · 悬浮摇杆 · 撕咬攻击</p>
+<button id="startBtn">开始游戏</button>
+</div>
+<div id="biteBtn" style="display:none">🦷</div>
+<script>
+var canvas=document.getElementById("gameCanvas");
+var ctx=canvas.getContext("2d");
+var W=0,H=0;
+var gameState="start";
+var score=0;
+var lastTime=Date.now();
+
+function resize(){
+W=canvas.width=window.innerWidth;
+H=canvas.height=window.innerHeight;
+}
+window.addEventListener("resize",resize);
+resize();
+
+var player={x:W/2,y:H/2,vx:0,vy:0,size:30,angle:0,alive:true,hp:100,maxHp:100,level:1,exp:0};
+var enemies=[];
+var foods=[];
+var particles=[];
+var joystick={active:false,x:0,y:0,dx:0,dy:0,tx:0,ty:0};
+var biteBtn=document.getElementById("biteBtn");
+var startScreen=document.getElementById("startScreen");
+var startBtn=document.getElementById("startBtn");
+
+function spawnEnemy(){
+if(Math.random()>0.02)return;
+var types=[{name:"shrimp",size:15,color:"#ff7043",hp:20,speed:2},{name:"fish",size:25,color:"#4fc3f7",hp:40,speed:1.5},{name:"bigfish",size:40,color:"#1565c0",hp:80,speed:1}];
+var type=types[Math.floor(Math.random()*types.length)];
+var side=Math.floor(Math.random()*4);
+var x,y,vx,vy;
+if(side==0){x=Math.random()*W;y=-type.size-20;vx=(Math.random()-0.5)*2;vy=type.speed;}
+else if(side==1){x=W+type.size+20;y=Math.random()*H;vx=-type.speed;vy=(Math.random()-0.5)*2;}
+else if(side==2){x=Math.random()*W;y=H+type.size+20;vx=(Math.random()-0.5)*2;vy=-type.speed;}
+else{x=-type.size-20;y=Math.random()*H;vx=type.speed;vy=(Math.random()-0.5)*2;}
+enemies.push({x:x,y:y,vx:vx,vy:vy,type:type,hp:type.hp,alive:true});
+}
+
+function spawnFood(){
+if(Math.random()>0.05)return;
+var x=Math.random()*(W-40)+20;
+var y=Math.random()*(H-40)+20;
+foods.push({x:x,y:y,size:8,color:"#ffd740",value:10});
+}
+
+function drawFish(x,y,size,color,angle,isPlayer){
+ctx.save();
+ctx.translate(x,y);
+ctx.rotate(angle);
+ctx.fillStyle=color;
+ctx.beginPath();
+ctx.ellipse(0,0,size,size*0.6,0,0,Math.PI*2);
+ctx.fill();
+ctx.fillStyle=isPlayer?"#80f0ff":"#b0bec5";
+ctx.beginPath();
+ctx.ellipse(0,size*0.1,size*0.6,size*0.25,0,0,Math.PI);
+ctx.fill();
+var wave=Math.sin(Date.now()*0.01)*0.3;
+ctx.beginPath();
+ctx.moveTo(-size*0.7,0);
+ctx.quadraticCurveTo(-size*1.1,-size*0.4+wave*size,-size*1.4,-size*0.5+wave*size);
+ctx.quadraticCurveTo(-size,0,-size*1.4,size*0.5+wave*size);
+ctx.quadraticCurveTo(-size*1.1,size*0.4+wave*size,-size*0.7,0);
+ctx.fillStyle=color;
+ctx.fill();
+ctx.fillStyle="#fff";
+ctx.beginPath();
+ctx.arc(size*0.4,-size*0.15,size*0.2,0,Math.PI*2);
+ctx.fill();
+ctx.fillStyle="#1a1a2e";
+ctx.beginPath();
+ctx.arc(size*0.5,-size*0.15,size*0.1,0,Math.PI*2);
+ctx.fill();
+ctx.restore();
+}
+
+function drawBackground(){
+var grad=ctx.createLinearGradient(0,0,0,H);
+grad.addColorStop(0,"#010812");
+grad.addColorStop(0.5,"#061a33");
+grad.addColorStop(1,"#0c2844");
+ctx.fillStyle=grad;
+ctx.fillRect(0,0,W,H);
+ctx.fillStyle="rgba(79,195,247,0.05)";
+for(var i=0;i<5;i++){
+var x=(i*W/4+Date.now()*0.01)%W;
+ctx.beginPath();
+ctx.moveTo(x,0);
+ctx.lineTo(x+40,H);
+ctx.lineTo(x+15,H);
+ctx.closePath();
+ctx.fill();
+}
+}
+
+function drawHUD(){
+ctx.fillStyle="rgba(2,8,18,0.6)";
+ctx.fillRect(0,0,W,50);
+ctx.fillStyle="#fff";
+ctx.font="bold 18px Arial";
+ctx.textAlign="left";
+ctx.fillText("🐟 Score: "+score+" | Lv."+player.level,15,30);
+if(player.alive){
+var barW=100;
+var barH=6;
+var barX=15;
+var barY=38;
+ctx.fillStyle="rgba(0,0,0,0.5)";
+ctx.fillRect(barX-1,barY-1,barW+2,barH+2);
+ctx.fillStyle=player.hp/player.maxHp>0.5?"#00e676":player.hp/player.maxHp>0.25?"#ff9800":"#f44336";
+ctx.fillRect(barX,barY,barW*(player.hp/player.maxHp),barH);
+}
+}
+
+function update(dt){
+if(gameState!=="playing")return;
+if(joystick.active){
+player.vx+=joystick.dx*5;
+player.vy+=joystick.dy*5;
+if(Math.abs(joystick.dx)>0.1||Math.abs(joystick.dy)>0.1){
+player.angle=Math.atan2(joystick.dy,joystick.dx);
+}
+}
+player.vx*=0.9;
+player.vy*=0.9;
+player.x+=player.vx;
+player.y+=player.vy;
+player.x=Math.max(player.size,Math.min(W-player.size,player.x));
+player.y=Math.max(player.size,Math.min(H-player.size,player.y));
+spawnEnemy();
+spawnFood();
+for(var i=enemies.length-1;i>=0;i--){
+var e=enemies[i];
+e.x+=e.vx*20*dt;
+e.y+=e.vy*20*dt;
+var dx=player.x-e.x;
+var dy=player.y-e.y;
+var dist=Math.sqrt(dx*dx+dy*dy);
+if(dist<player.size+e.type.size*0.6&&player.alive){
+if(player.size>=e.type.size*0.8){
+e.hp-=100;
+if(e.hp<=0){
+score+=e.type.hp;
+player.exp+=e.type.hp;
+if(player.exp>=player.level*50){
+player.level++;
+player.exp=0;
+player.size+=5;
+player.maxHp+=20;
+player.hp=player.maxHp;
+}
+enemies.splice(i,1);
+}
+}else{
+player.alive=false;
+}
+}
+if(e.x<-100||e.x>W+100||e.y<-100||e.y>H+100)enemies.splice(i,1);
+}
+for(var i=foods.length-1;i>=0;i--){
+var f=foods[i];
+var dx=player.x-f.x;
+var dy=player.y-f.y;
+if(Math.sqrt(dx*dx+dy*dy)<player.size+f.size){
+score+=f.value;
+player.size+=0.5;
+foods.splice(i,1);
+}
+}
+}
+
+function draw(){
+ctx.clearRect(0,0,W,H);
+drawBackground();
+if(gameState==="playing"){
+for(var i=0;i<foods.length;i++){
+var f=foods[i];
+ctx.fillStyle=f.color;
+ctx.beginPath();
+ctx.arc(f.x,f.y,f.size,0,Math.PI*2);
+ctx.fill();
+}
+for(var i=0;i<enemies.length;i++){
+var e=enemies[i];
+drawFish(e.x,e.y,e.type.size,e.type.color,Math.atan2(e.vy,e.vx),false);
+}
+if(player.alive){
+drawFish(player.x,player.y,player.size,"#00d4ff",player.angle,true);
+}
+drawHUD();
+}
+}
+
+function gameLoop(){
+var now=Date.now();
+var dt=(now-lastTime)/1000;
+lastTime=now;
+if(dt>0.1)dt=0.016;
+update(dt);
+draw();
+requestAnimationFrame(gameLoop);
+}
+
+function startGame(){
+gameState="playing";
+startScreen.style.display="none";
+biteBtn.style.display="flex";
+player.x=W/2;
+player.y=H/2;
+player.vx=0;
+player.vy=0;
+player.size=30;
+player.alive=true;
+player.hp=100;
+player.maxHp=100;
+player.level=1;
+player.exp=0;
+score=0;
+enemies=[];
+foods=[];
+}
+
+startBtn.addEventListener("click",startGame);
+
+biteBtn.addEventListener("touchstart",function(e){
+e.preventDefault();
+for(var i=enemies.length-1;i>=0;i--){
+var dx=player.x-enemies[i].x;
+var dy=player.y-enemies[i].y;
+if(Math.sqrt(dx*dx+dy*dy)<player.size*2&&enemies[i].type.size<player.size){
+enemies[i].hp-=50;
+if(enemies[i].hp<=0){
+score+=enemies[i].type.hp;
+enemies.splice(i,1);
+}
+}
+}
+});
+
+biteBtn.addEventListener("mousedown",function(e){
+for(var i=enemies.length-1;i>=0;i--){
+var dx=player.x-enemies[i].x;
+var dy=player.y-enemies[i].y;
+if(Math.sqrt(dx*dx+dy*dy)<player.size*2&&enemies[i].type.size<player.size){
+enemies[i].hp-=50;
+if(enemies[i].hp<=0){
+score+=enemies[i].type.hp;
+enemies.splice(i,1);
+}
+}
+}
+});
+
+var touchId=null;
+canvas.addEventListener("touchstart",function(e){
+e.preventDefault();
+if(gameState!=="playing")return;
+for(var i=0;i<e.changedTouches.length;i++){
+var t=e.changedTouches[i];
+if(t.clientX<W/2&&!joystick.active){
+joystick.active=true;
+joystick.x=t.clientX;
+joystick.y=t.clientY;
+joystick.tx=t.clientX;
+joystick.ty=t.clientY;
+touchId=t.identifier;
+}
+}
+},{passive:false});
+
+canvas.addEventListener("touchmove",function(e){
+e.preventDefault();
+if(gameState!=="playing"||!joystick.active)return;
+for(var i=0;i<e.changedTouches.length;i++){
+var t=e.changedTouches[i];
+if(t.identifier===touchId){
+var dx=t.clientX-joystick.x;
+var dy=t.clientY-joystick.y;
+var dist=Math.sqrt(dx*dx+dy*dy);
+if(dist>60){
+dx=dx/dist*60;
+dy=dy/dist*60;
+}
+joystick.tx=joystick.x+dx;
+joystick.ty=joystick.y+dy;
+joystick.dx=dx/60;
+joystick.dy=dy/60;
+}
+}
+},{passive:false});
+
+canvas.addEventListener("touchend",function(e){
+e.preventDefault();
+for(var i=0;i<e.changedTouches.length;i++){
+var t=e.changedTouches[i];
+if(t.identifier===touchId){
+joystick.active=false;
+joystick.dx=0;
+joystick.dy=0;
+touchId=null;
+}
+}
+},{passive:false});
+
+canvas.addEventListener("mousedown",function(e){
+if(gameState!=="playing")return;
+if(e.clientX<W/2){
+joystick.active=true;
+joystick.x=e.clientX;
+joystick.y=e.clientY;
+joystick.tx=e.clientX;
+joystick.ty=e.clientY;
+}
+});
+
+canvas.addEventListener("mousemove",function(e){
+if(gameState!=="playing"||!joystick.active)return;
+var dx=e.clientX-joystick.x;
+var dy=e.clientY-joystick.y;
+var dist=Math.sqrt(dx*dx+dy*dy);
+if(dist>60){
+dx=dx/dist*60;
+dy=dy/dist*60;
+}
+joystick.tx=joystick.x+dx;
+joystick.ty=joystick.y+dy;
+joystick.dx=dx/60;
+joystick.dy=dy/60;
+});
+
+canvas.addEventListener("mouseup",function(){
+joystick.active=false;
+joystick.dx=0;
+joystick.dy=0;
+});
+
+gameLoop();
+</script>
+</body>
+</html>
