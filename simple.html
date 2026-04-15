@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>小鱼快跑</title>
+<style>
+body { margin: 0; overflow: hidden; background: #001122; touch-action: none; }
+canvas { display: block; }
+#start { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(180deg, #001122, #003344); z-index: 10; }
+#start h1 { color: #00e5ff; font-size: 40px; margin: 0 0 20px; }
+#start button { padding: 15px 40px; font-size: 20px; background: #0091ea; color: white; border: none; border-radius: 25px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="start"><h1>🐟 小鱼快跑</h1><button onclick="startGame()">开始游戏</button></div>
+<canvas id="c"></canvas>
+<script>
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+var W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+var player = { x: 0, y: 0, size: 20, speed: 0, angle: 0, alive: false };
+var fish = [];
+var foods = [];
+var gameRunning = false;
+
+function spawnFish() {
+  if (Math.random() > 0.03) return;
+  var sizes = [10, 15, 25, 40, 60];
+  var colors = ['#ff7043', '#4fc3f7', '#ff5722', '#1565c0', '#546e7a'];
+  var i = Math.floor(Math.random() * sizes.length);
+  var size = sizes[i];
+  var side = Math.floor(Math.random() * 4);
+  var x, y, vx, vy;
+  if (side === 0) { x = Math.random() * W; y = -size - 10; vx = (Math.random() - 0.5) * 2; vy = 1 + Math.random(); }
+  else if (side === 1) { x = W + size + 10; y = Math.random() * H; vx = -(1 + Math.random()); vy = (Math.random() - 0.5) * 2; }
+  else if (side === 2) { x = Math.random() * W; y = H + size + 10; vx = (Math.random() - 0.5) * 2; vy = -(1 + Math.random()); }
+  else { x = -size - 10; y = Math.random() * H; vx = 1 + Math.random(); vy = (Math.random() - 0.5) * 2; }
+  fish.push({ x: x, y: y, vx: vx, vy: vy, size: size, color: colors[i] });
+}
+
+function spawnFood() {
+  if (Math.random() > 0.05) return;
+  foods.push({ x: Math.random() * (W - 40) + 20, y: Math.random() * (H - 40) + 20 });
+}
+
+function drawFish(x, y, size, color, angle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, size, size * 0.6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.7, 0);
+  ctx.lineTo(-size * 1.3, -size * 0.4);
+  ctx.lineTo(-size * 1.3, size * 0.4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function update() {
+  if (!gameRunning || !player.alive) return;
+  spawnFish();
+  spawnFood();
+  player.x += Math.cos(player.angle) * player.speed;
+  player.y += Math.sin(player.angle) * player.speed;
+  player.x = Math.max(player.size, Math.min(W - player.size, player.x));
+  player.y = Math.max(player.size, Math.min(H - player.size, player.y));
+  player.speed *= 0.95;
+  
+  for (var i = fish.length - 1; i >= 0; i--) {
+    var f = fish[i];
+    f.x += f.vx;
+    f.y += f.vy;
+    var dx = player.x - f.x;
+    var dy = player.y - f.y;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < player.size + f.size) {
+      if (player.size >= f.size) {
+        player.size += 1;
+        fish.splice(i, 1);
+      } else {
+        player.alive = false;
+      }
+    }
+    if (f.x < -100 || f.x > W + 100 || f.y < -100 || f.y > H + 100) fish.splice(i, 1);
+  }
+  
+  for (var i = foods.length - 1; i >= 0; i--) {
+    var dx = player.x - foods[i].x;
+    var dy = player.y - foods[i].y;
+    if (Math.sqrt(dx * dx + dy * dy) < player.size + 5) {
+      player.size += 0.5;
+      foods.splice(i, 1);
+    }
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#001122';
+  ctx.fillRect(0, 0, W, H);
+  if (!gameRunning) return;
+  
+  for (var i = 0; i < foods.length; i++) {
+    ctx.fillStyle = '#ffd740';
+    ctx.beginPath();
+    ctx.arc(foods[i].x, foods[i].y, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  
+  for (var i = 0; i < fish.length; i++) {
+    var f = fish[i];
+    drawFish(f.x, f.y, f.size, f.color, Math.atan2(f.vy, f.vx));
+  }
+  
+  if (player.alive) {
+    drawFish(player.x, player.y, player.size, '#00e5ff', player.angle);
+  }
+  
+  ctx.fillStyle = '#fff';
+  ctx.font = '18px Arial';
+  ctx.fillText('Size: ' + Math.floor(player.size), 15, 30);
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function startGame() {
+  document.getElementById('start').style.display = 'none';
+  player.x = W / 2;
+  player.y = H / 2;
+  player.size = 20;
+  player.speed = 0;
+  player.angle = 0;
+  player.alive = true;
+  fish = [];
+  foods = [];
+  gameRunning = true;
+}
+
+canvas.addEventListener('touchstart', function(e) {
+  e.preventDefault();
+  if (!gameRunning || !player.alive) return;
+  var t = e.touches[0];
+  var dx = t.clientX - player.x;
+  var dy = t.clientY - player.y;
+  player.angle = Math.atan2(dy, dx);
+  player.speed = 5;
+}, {passive: false});
+
+canvas.addEventListener('touchmove', function(e) {
+  e.preventDefault();
+  if (!gameRunning || !player.alive) return;
+  var t = e.touches[0];
+  var dx = t.clientX - player.x;
+  var dy = t.clientY - player.y;
+  player.angle = Math.atan2(dy, dx);
+}, {passive: false});
+
+canvas.addEventListener('mousedown', function(e) {
+  if (!gameRunning || !player.alive) return;
+  var dx = e.clientX - player.x;
+  var dy = e.clientY - player.y;
+  player.angle = Math.atan2(dy, dx);
+  player.speed = 5;
+});
+
+loop();
+</script>
+</body>
+</html>
